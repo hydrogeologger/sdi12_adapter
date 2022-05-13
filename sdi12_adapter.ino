@@ -124,35 +124,44 @@ void parseSdi12Cmd(const String command, SDI12CommandSet_s *parsed_cmd) {
     }
 }
 
-//TODO: optimize data formatting function
-void formatOutputSDI(float* measurementValues, String* data_values, unsigned int maxChar) {
-    /* Ingests an array of floats and produces Strings in SDI-12 output format */
+/**
+ * @brief Ingests an array of floats and produces Strings in SDI-12 output format
+ * 
+ * @param[in] measurementValues Array of measurements in memory for parsing
+ * @param[out] data_values Buffer array in memory to store data
+ * @param[in] max_char_size Maximum size allowed for data string (exclude null terminator)
+ * @param[in] measurement_count (Optional) Number of values to parse
+ */
+void formatOutputSDI(const float *measurementValues, String *data_values, const uint8_t max_char_size, uint8_t measurement_count = 0) {
+    if (measurement_count <= 0) {
+        measurement_count = sizeof(*measurementValues) / sizeof(char*);
+    }
+    uint8_t data_values_size = sizeof(*data_values) / sizeof(char*);
 
-    // uint8_t lenValues = sizeof(*measurementValues) / sizeof(char *);
-    // uint8_t lenDValues = sizeof(*data_values) / sizeof(char *);
-    data_values[0] = "";
-    int j = 0;
-    char valStr[SDI12_VALUE_STR_SIZE+1] = "";
-    uint8_t valStr_len = 0;
+    *data_values = "";
+    uint8_t data_values_index = 0; // Index location of data_values array
+    char data_buffer[(SDI12_VALUE_STR_SIZE + 1)] = ""; // Temp string buffer + null terminator
+    uint8_t len_data = 0; // Storage for string length of digit to alpha conversion
 
     // upper limit on i should be number of elements in measurementValues
-    for (int i = 0; i < MEASUREMENT_ARRAY_MAX_SIZE; i++) {
+    for (uint8_t i = 0; i < measurement_count; i++) {
         // Read float value "i" as a String with 6 deceimal digits
         // (NOTE: SDI-12 specifies max of 7 digits per value; we can only use 6
         //  decimal place precision if integer part is one digit)
-        valStr_len = dtoa(measurementValues[i], valStr, 6, SDI12_VALUE_STR_SIZE);
+        len_data = dtoa(measurementValues[i], data_buffer, 6, SDI12_VALUE_STR_SIZE);
         // Append data_values[j] if it will not exceed 35 (aM!) or 75 (aC!) characters
-        if (data_values[j].length() + valStr_len < maxChar) {
-            data_values[j] += valStr;
-        }
-        // Start a new data_values "line" if appending would exceed 35/75 characters
-        else {
-            data_values[++j] = valStr;
+        if (data_values[data_values_index].length() + len_data < max_char_size) {
+            data_values[data_values_index] += data_buffer;
+        } else {
+            // Start a new data_values "line" if appending would exceed 35/75 characters
+            data_values[++data_values_index] = data_buffer;
         }
     }
 
     // Fill rest of data_values with blank strings
-    while (j < MEASUREMENT_ARRAY_MAX_SIZE) { data_values[++j] = ""; }
+    while (data_values_index < data_values_size) {
+        data_values[++data_values_index] = "";
+    }
 }
 
 
