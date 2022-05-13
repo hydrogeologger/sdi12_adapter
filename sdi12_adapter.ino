@@ -26,6 +26,8 @@
 * Analog Mode: A4 and A5
 * I2C Mode: A4 (SDA) and A5 (SCL)
 */
+
+/* Analog Settings */
 #define ANALOG_IN_1_PIN A4
 #define ANALOG_IN_2_PIN A5
 
@@ -36,7 +38,6 @@
 #define DATA_OUT_BUFFER_ARR_SIZE 10 // Max number of array elements for 0Dx! string response
 
 typedef enum DeviceMode_e: uint8_t {
-    kModeUnset = 0,
     kModeAnalog = 1,
     kModeUART = 2,
     kModeI2C = 3
@@ -46,20 +47,6 @@ typedef enum DeviceMode_e: uint8_t {
 SDI12Slave slaveSDI12(SDI12_PIN);
 SDI12Sensor sensor(SENSOR_ADDRESS, EEPROM_ADDR);
 DeviceMode_e mode = kModeAnalog; // Set default to analog
-
-
-//TODO: setup data capture/polling
-void pollSensor(float* measurementValues) {
-    measurementValues[0] = 1.1;
-    measurementValues[1] = -2.22;
-    measurementValues[2] = 3.333;
-    measurementValues[3] = -4.4444;
-    measurementValues[4] = 5.55555;
-    measurementValues[5] = -6.666666;
-    measurementValues[6] = 78.777777;
-    measurementValues[7] = -890.888888;
-    measurementValues[8] = -0.11111111;
-}
 
 /**
  * @brief Ingests a command from an SDI-12 master, sends the applicable response, and
@@ -179,7 +166,6 @@ void setup() {
     }
 
     switch (mode) {
-        case kModeUnset: break;
         case kModeAnalog:
             pinMode(ANALOG_IN_1_PIN, INPUT);
             pinMode(ANALOG_IN_2_PIN, INPUT);
@@ -190,7 +176,13 @@ void setup() {
         case kModeI2C:
             Wire.begin();
             break;
+        default:
+            // Fall back and analog mode
+            pinMode(ANALOG_IN_1_PIN, INPUT);
+            pinMode(ANALOG_IN_2_PIN, INPUT);
+            break;
     }
+    slaveSDI12.forceListen();  // sets SDIPIN as input to prepare for incoming message
 }
 
 void loop() {
@@ -199,6 +191,7 @@ void loop() {
     static String commandReceived = "";  // String object to hold the incoming command
     SDI12CommandSet_s parsed_cmd;
     String response = "";
+    uint8_t measurement_count = 0;
 
 
     // If a byte is available, an SDI message is queued up. Read in the entire message
@@ -286,17 +279,22 @@ void loop() {
                      field2 - describes parameter units
                      additional (optional) - additional fields are to deliminated using ','
                     */
-                    if (parsed_cmd.secondary == kMeasurement) {
-                        if (parsed_cmd.param1 == 0 && parsed_cmd.param2 > 0 &&
-                                parsed_cmd.param2 <= MEASUREMENT_ARRAY_MAX_SIZE) {
-                            response += ",field1,field2;";
-                        }
-                    } else if (parsed_cmd.secondary == kConcurrentMeasurement) {
-                        if (parsed_cmd.param1 == 0 && parsed_cmd.param2 > 0 &&
-                                parsed_cmd.param2 <= MEASUREMENT_ARRAY_MAX_SIZE) {
-                            response += ",field1,field2,field3;";
-                        }
-                    } else if (parsed_cmd.secondary == kContinuousMeasurement) {
+                    switch (mode) {
+                        case kModeAnalog:
+                            if (parsed_cmd.secondary == kMeasurement ||
+                                    parsed_cmd.secondary == kConcurrentMeasurement) {
+                                if (parsed_cmd.param1 == 0 && parsed_cmd.param2 > 0 &&
+                                        parsed_cmd.param2 <= 2) {
+                                    response += "ADC,unitless,10bit ADC;";
+                                }
+                            }
+                            break;
+
+                        case kModeUART:
+                        case kModeI2C:
+                            break;
+                    }
+                    if (parsed_cmd.secondary == kContinuousMeasurement) {
                         // Currently not implemented, add appropriate parameter
                         // condition check for response
                     } else if (parsed_cmd.secondary == kHighVolumeASCII) {
@@ -326,22 +324,45 @@ void loop() {
                 // NOTE: Your application might have a different data type (e.g. int) and
                 //       number of values to report!
                 // Response should be in following format atttn<CR><LF>
-                if (parsed_cmd.param1 == 0) {
-                    response += "0219";
-                    // No need to perform measurement if identification requested
-                    if (parsed_cmd.primary == kIdentify) { break; }
-                    response += "\r\n";
-                    slaveSDI12.sendResponse(response);
-                    delay(2000); // 2 Second delay to simulate sensor measurement
-                    pollSensor(measurementValues);
-                } else {
+                measurement_count = 0;
+                switch (mode) {
+                    case kModeAnalog:
+                        if (parsed_cmd.param1 == 0) {
+                            measurement_count = 1;
+                            response += "0021";
+                            // No need to perform measurement if identification requested
+                            if (parsed_cmd.primary == kIdentify) { break; }
+                            response += "\r\n";
+                            slaveSDI12.sendResponse(response);
+
+                            measurementValues[0] = analogRead(ANALOG_IN_1_PIN);
+
+                        } else if (parsed_cmd.param1 == 1) {
+                            measurement_count = 1;
+                            response += "0021";
+                            // No need to perform measurement if identification requested
+                            if (parsed_cmd.primary == kIdentify) { break; }
+                            response += "\r\n";
+                            slaveSDI12.sendResponse(response);
+
+                            measurementValues[0] = analogRead(ANALOG_IN_2_PIN);
+
+                        }
+                        break;
+
+                    case kModeUART:
+                    case kModeI2C:
+                        break;
+                }
+
+                if (measurement_count == 0) {
                     response += "0000";
                     // No need to perform measurement if identification requested
                     if (parsed_cmd.primary == kIdentify) { break; }
                     response += "\r\n";
                     slaveSDI12.sendResponse(response);
                     sensor.SetActive(false);
-                }
+                } else if (parsed_cmd.primary == kIdentify) { break; }
 
                 // For compliance to cancel measurement if a line break is detected
                 if (slaveSDI12.LineBreakReceived() || !sensor.IsActive()) {
@@ -350,8 +371,8 @@ void loop() {
                     }
                     sensor.SetActive(false);
                 } else {
-                    // Populate the "data_out_buffer_arr" String array with the values in SDI-12 format
-                    formatOutputSDI(measurementValues, data_out_buffer_arr, SDI12_VALUES_STR_SIZE_35);
+                    // Populate the "data_values" String array with the values in SDI-12 format
+                    formatOutputSDI(measurementValues, data_out_buffer_arr, SDI12_VALUES_STR_SIZE_35, measurement_count);
                     // For aM!, Send "service request" (<address><CR><LF>) when data is ready
                     response = sensor.Address();
                 }
@@ -365,22 +386,34 @@ void loop() {
                 // NOTE: Your application might have a different data type (e.g. int) and
                 //       number of values to report!
                 // Response should be in following format atttnn<CR><LF>
-                if (parsed_cmd.param1 == 0) {
-                    response += "02109";
-                    // No need to perform measurement if identification requested
-                    if (parsed_cmd.primary == kIdentify) { break; }
-                    response += "\r\n";
-                    slaveSDI12.sendResponse(response);
-                    delay(2000); // 2 Second delay to simulate sensor measurement
-                    pollSensor(measurementValues);
-                } else {
+                measurement_count = 0;
+                switch (mode) {
+                    case kModeAnalog:
+                        if (parsed_cmd.param1 == 0) {
+                            measurement_count = 2;
+                            response += "00202";
+                            if (parsed_cmd.primary == kIdentify) { break; }
+                            response += "\r\n";
+                            slaveSDI12.sendResponse(response);
+
+                            measurementValues[0] = analogRead(ANALOG_IN_1_PIN);
+                            measurementValues[1] = analogRead(ANALOG_IN_2_PIN);
+                        }
+                        break;
+
+                    case kModeUART:
+                    case kModeI2C:
+                        break;
+                }
+
+                if (measurement_count == 0) {
                     response += "00000";
                     // No need to perform measurement if identification requested
                     if (parsed_cmd.primary == kIdentify) { break; }
                     response += "\r\n";
                     slaveSDI12.sendResponse(response);
                     sensor.SetActive(false);
-                }
+                } else if (parsed_cmd.primary == kIdentify) { break; }
 
                 // For compliance to cancel measurement if a correct address is detected
                 for (int a = 0; a < slaveSDI12.available(); a++) {
@@ -398,26 +431,24 @@ void loop() {
                         data_out_buffer_arr[i] = "";
                     }
                 } else {
-                    // Populate the "data_out_buffer_arr" String array with the values in SDI-12 format
-                    formatOutputSDI(measurementValues, data_out_buffer_arr, SDI12_VALUES_STR_SIZE_75);
+                    // Populate the "data_values" String array with the values in SDI-12 format
+                    formatOutputSDI(measurementValues, data_out_buffer_arr, SDI12_VALUES_STR_SIZE_75, measurement_count);
                 }
+                // Sensor not expected to transmit anything at this point, make inactive
                 sensor.SetActive(false);
                 break;
 
             case kStateHighMeasurement:
                 // For aHA! and aHB! commands
-                // Do whatever the sensor is supposed to do here
-                // For this example, we will just create arbitrary "simulated" sensor data
-                // NOTE: Your application might have a different data type (e.g. int) and
-                //       number of values to report!
                 // Response should be in following format atttnnn<CR><LF>
-                response += "021009";
+
+                // Do nothing, not implemented
+                response += "000000";
                 // No need to perform measurement if identification requested
                 if (parsed_cmd.primary == kIdentify) { break; }
                 response += "\r\n";
                 slaveSDI12.sendResponse(response);
-                delay(2000); // 2 Second delay to simulate sensor measurement
-                pollSensor(measurementValues);
+                sensor.SetActive(false); // Not implemented, clear data
 
                 // For compliance to cancel measurement if a correct address is detected
                 for (int a = 0; a < slaveSDI12.available(); a++) {
@@ -444,6 +475,7 @@ void loop() {
                 } else if (parsed_cmd.primary == kHighVolumeByte) {
                     // Perform data storage here
                 }
+                // Sensor not expected to transmit anything at this point, make inactive
                 sensor.SetActive(false);
                 break;
 
@@ -451,14 +483,15 @@ void loop() {
                 // For aRx! commands
                 // Data should be available and broadcasted immediately similar to aDx! commands
                 // Message <values> length is limited to 75 characters long
-                if (parsed_cmd.param1 < MEASUREMENT_ARRAY_MAX_SIZE) {
-                    pollSensor(measurementValues);
-                    char temp_string_value[SDI12_VALUE_STR_SIZE+1];
-                    if (dtoa(measurementValues[parsed_cmd.param1], temp_string_value,6, SDI12_VALUE_STR_SIZE)) {
-                        response += temp_string_value;
-                    }
-                } else {
-                    // Do nothing
+
+                // Do nothing, not implemented
+                switch (mode) {
+                    case kModeAnalog:
+                        break;
+                    case kModeUART:
+                        break;
+                    case kModeI2C:
+                        break;
                 }
 
                 // Add CRC if requested for appropriate commands
@@ -486,6 +519,7 @@ void loop() {
                 for (size_t i = 0; i < (sizeof(data_out_buffer_arr)/sizeof(*data_out_buffer_arr)); i++) {
                     data_out_buffer_arr[i] = "";
                 }
+                // Sensor not expected to transmit anything at this point, make inactive
                 sensor.SetActive(false);
                 break;
         }
@@ -493,9 +527,9 @@ void loop() {
         if (sensor.IsActive() || parsed_cmd.primary == kAddressQuery) {
             response += "\r\n";
             slaveSDI12.sendResponse(response);
+            sensor.SetActive(false);
         }
         sensor.SetState(kStateReady);
-        sensor.SetActive(false);
         slaveSDI12.forceListen();   // sets SDI-12 pin as input to prepare for
                                     // incoming message AGAIN
     }
