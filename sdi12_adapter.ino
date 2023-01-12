@@ -31,6 +31,11 @@
 #define ANALOG_IN_1_PIN A4
 #define ANALOG_IN_2_PIN A5
 
+/* I2C Settings */
+#define SDA_PIN A4
+#define SCL_PIN A5
+
+/* UART, Serial Settings */
 #define SERIAL_DEFAULT_BAUDRATE 9600
 
 /* Set up pre determined array size for data storage */
@@ -149,6 +154,12 @@ void formatOutputSDI(const float *measurementValues, String *data_values, const 
     while (data_values_index < data_values_size) {
         data_values[++data_values_index] = "";
     }
+}
+
+
+//TODO: setup data capture/polling
+void ProcessMeasurement(SDI12CommandSet_s parsed_cmd) {
+
 }
 
 
